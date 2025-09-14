@@ -68,25 +68,32 @@ class _StudentDashboardState extends State<StudentDashboard> {
 
       // Fetch sessions from Firestore
       final sessions = await _firestoreService.fetchSessions();
-      final today = DateTime.now();
+      final nowTs = DateTime.now();
 
-      final todaySessions = sessions.where((s) {
-        return s.startTime.year == today.year &&
-            s.startTime.month == today.month &&
-            s.startTime.day == today.day;
-      }).toList();
+      final todaySessions =
+          sessions
+              .where(
+                (s) =>
+                    s.startTime.year == nowTs.year &&
+                    s.startTime.month == nowTs.month &&
+                    s.startTime.day == nowTs.day,
+              )
+              .toList()
+            ..sort((a, b) => a.startTime.compareTo(b.startTime));
 
-      // Consider sessions active if status == 'active' (maps from isActive)
-      final activeSessions = sessions
-          .where((s) => s.status == 'active')
-          .toList();
+      // Active sessions: now between start and end
+      final activeSessions =
+          sessions
+              .where(
+                (s) => nowTs.isAfter(s.startTime) && nowTs.isBefore(s.endTime),
+              )
+              .toList()
+            ..sort((a, b) => a.startTime.compareTo(b.startTime));
 
-      final weekFromNow = today.add(const Duration(days: 7));
-      final upcomingSessions = sessions.where((s) {
-        return s.startTime.isAfter(today) &&
-            s.startTime.isBefore(weekFromNow) &&
-            s.status == 'scheduled';
-      }).toList();
+      // Upcoming: query directly from Firestore (startTime > now)
+      final upcomingSessions = await _firestoreService.fetchUpcomingSessions(
+        from: nowTs,
+      );
 
       // Attendance percentages can be computed later when attendance data exists
       final attendancePercentages = <String, double>{};
@@ -138,9 +145,9 @@ class _StudentDashboardState extends State<StudentDashboard> {
 
                     const SizedBox(height: 20),
 
-                    // Active Session Section
+                    // Active Sessions Section
                     if (_activeSessions.isNotEmpty)
-                      _buildActiveSession(context),
+                      _buildActiveSessions(context),
 
                     const SizedBox(height: 20),
 
@@ -318,94 +325,118 @@ class _StudentDashboardState extends State<StudentDashboard> {
     );
   }
 
-  Widget _buildActiveSession(BuildContext context) {
+  Widget _buildActiveSessions(BuildContext context) {
     if (_activeSessions.isEmpty) return const SizedBox();
 
-    final session = _activeSessions.first;
+    final now = DateTime.now();
     return _buildCard(
-      title: "Active Session",
+      title: "Active Sessions (${_activeSessions.length})",
       child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                decoration: BoxDecoration(
-                  color: Colors.red[50],
-                  borderRadius: BorderRadius.circular(8),
+        children: _activeSessions.map((session) {
+          final minutesLeft = session.endTime.isAfter(now)
+              ? session.endTime.difference(now).inMinutes
+              : 0;
+          return Container(
+            margin: const EdgeInsets.only(bottom: 12),
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: Colors.grey[200]!),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 8,
+                        vertical: 4,
+                      ),
+                      decoration: BoxDecoration(
+                        color: Colors.red[50],
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Text(
+                        'LIVE',
+                        style: TextStyle(
+                          fontSize: 10,
+                          fontWeight: FontWeight.bold,
+                          color: Colors.red[600],
+                          fontFamily: 'Poppins',
+                        ),
+                      ),
+                    ),
+                    const Spacer(),
+                    Text(
+                      '$minutesLeft min left',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: Colors.grey[600],
+                        fontFamily: 'Poppins',
+                      ),
+                    ),
+                  ],
                 ),
-                child: Text(
-                  'LIVE',
-                  style: TextStyle(
-                    fontSize: 10,
+                const SizedBox(height: 12),
+                Text(
+                  session.subjectName.isNotEmpty
+                      ? session.subjectName
+                      : (session.subjectId.isNotEmpty
+                            ? session.subjectId
+                            : 'Class'),
+                  style: const TextStyle(
+                    fontSize: 18,
                     fontWeight: FontWeight.bold,
-                    color: Colors.red[600],
+                    color: Colors.black87,
                     fontFamily: 'Poppins',
                   ),
                 ),
-              ),
-              const Spacer(),
-              Text(
-                '${session.remainingMinutes} min left',
-                style: TextStyle(
-                  fontSize: 12,
-                  color: Colors.grey[600],
-                  fontFamily: 'Poppins',
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 12),
-          Text(
-            session.subjectName,
-            style: const TextStyle(
-              fontSize: 18,
-              fontWeight: FontWeight.bold,
-              color: Colors.black87,
-              fontFamily: 'Poppins',
-            ),
-          ),
-          const SizedBox(height: 4),
-          Text(
-            session.facultyName,
-            style: TextStyle(
-              fontSize: 14,
-              color: Colors.grey[600],
-              fontFamily: 'Poppins',
-            ),
-          ),
-          const SizedBox(height: 4),
-          Text(
-            '${session.formattedStartTime} - ${session.formattedEndTime}',
-            style: TextStyle(
-              fontSize: 14,
-              color: Colors.grey[600],
-              fontFamily: 'Poppins',
-            ),
-          ),
-          const SizedBox(height: 16),
-          CustomButton(
-            text: 'Mark Attendance',
-            onPressed: () async {
-              final result = await Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (context) => FacialVerificationPage(
-                    subjectName: session.subjectName,
-                    facultyName: session.facultyName,
-                    sessionId: session.id,
+                const SizedBox(height: 4),
+                if (session.facultyName.isNotEmpty)
+                  Text(
+                    session.facultyName,
+                    style: TextStyle(
+                      fontSize: 14,
+                      color: Colors.grey[600],
+                      fontFamily: 'Poppins',
+                    ),
+                  ),
+                const SizedBox(height: 4),
+                Text(
+                  '${session.formattedStartTime} - ${session.formattedEndTime}',
+                  style: TextStyle(
+                    fontSize: 14,
+                    color: Colors.grey[600],
+                    fontFamily: 'Poppins',
                   ),
                 ),
-              );
-              if (result == true) {
-                _loadDashboardData();
-              }
-            },
-            backgroundColor: Colors.green,
-            height: 48,
-          ),
-        ],
+                const SizedBox(height: 16),
+                CustomButton(
+                  text: 'Mark Attendance',
+                  onPressed: () async {
+                    final result = await Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (context) => FacialVerificationPage(
+                          subjectName: session.subjectName,
+                          facultyName: session.facultyName,
+                          sessionId: session.id,
+                        ),
+                      ),
+                    );
+                    if (result == true) {
+                      _loadDashboardData();
+                    }
+                  },
+                  backgroundColor: Colors.green,
+                  height: 48,
+                ),
+              ],
+            ),
+          );
+        }).toList(),
       ),
     );
   }

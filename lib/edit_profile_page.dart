@@ -3,6 +3,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'widgets/custom_button.dart';
 import 'widgets/custom_input_field.dart';
 import 'models/student.dart' as student_model;
+import 'services/user_service.dart';
 
 class EditProfilePage extends StatefulWidget {
   const EditProfilePage({super.key});
@@ -29,6 +30,7 @@ class _EditProfilePageState extends State<EditProfilePage> {
   // Loading state
   bool _isLoading = false;
   student_model.Student? _currentStudent;
+  final _userService = UserService();
 
   @override
   void initState() {
@@ -43,24 +45,29 @@ class _EditProfilePageState extends State<EditProfilePage> {
       final user = FirebaseAuth.instance.currentUser;
       if (user == null) return;
 
-      // Build a minimal student profile from FirebaseAuth without any dummy data
+      // Try load from Firestore users/{uid}
+      final userDoc = await _userService.getUser(user.uid);
+
       final now = DateTime.now();
       final minimalStudent = student_model.Student(
         id: user.uid,
-        name: user.displayName ?? (user.email?.split('@').first ?? 'Student'),
-        email: user.email ?? '',
-        studentId: '',
-        phone: '',
-        dateOfBirth: '',
-        gender: 'Male',
-        address: '',
-        program: '',
-        year: '',
-        semester: '',
-        cgpa: 0.0,
-        creditsCompleted: 0,
-        totalCredits: 0,
-        expectedGraduation: '',
+        name:
+            (userDoc?['name'] ??
+            user.displayName ??
+            (user.email?.split('@').first ?? 'Student')),
+        email: userDoc?['email'] ?? user.email ?? '',
+        studentId: userDoc?['studentId'] ?? '',
+        phone: userDoc?['phone'] ?? '',
+        dateOfBirth: userDoc?['dateOfBirth'] ?? '',
+        gender: userDoc?['gender'] ?? 'Male',
+        address: userDoc?['address'] ?? '',
+        program: userDoc?['program'] ?? '',
+        year: userDoc?['year'] ?? '',
+        semester: userDoc?['semester'] ?? '',
+        cgpa: (userDoc?['cgpa'] ?? 0.0).toDouble(),
+        creditsCompleted: userDoc?['creditsCompleted'] ?? 0,
+        totalCredits: userDoc?['totalCredits'] ?? 0,
+        expectedGraduation: userDoc?['expectedGraduation'] ?? '',
         createdAt: now,
         updatedAt: now,
       );
@@ -589,35 +596,43 @@ class _EditProfilePageState extends State<EditProfilePage> {
     });
 
     try {
-      // Update student data
-      final updatedStudent = _currentStudent!.copyWith(
-        name: _nameController.text.trim(),
-        phone: _phoneController.text.trim(),
-        dateOfBirth: _dobController.text.trim(),
-        address: _addressController.text.trim(),
-        gender: _selectedGender,
-        program: _programController.text.trim(),
-        year: _yearController.text.trim(),
-        semester: _semesterController.text.trim(),
-      );
+      final uid = _currentStudent!.id;
+      final data = {
+        'name': _nameController.text.trim(),
+        'phone': _phoneController.text.trim(),
+        'dateOfBirth': _dobController.text.trim(),
+        'address': _addressController.text.trim(),
+        'gender': _selectedGender,
+        'program': _programController.text.trim(),
+        'year': _yearController.text.trim(),
+        'semester': _semesterController.text.trim(),
+        'email': _currentStudent!.email,
+        'studentId': _currentStudent!.studentId,
+      };
 
-      // No Firestore persistence here; just update local state
-      _currentStudent = updatedStudent;
+      await _userService.upsertUser(uid, data);
+
+      _currentStudent = _currentStudent!.copyWith(
+        name: data['name'],
+        phone: data['phone'],
+        dateOfBirth: data['dateOfBirth'],
+        address: data['address'],
+        gender: data['gender'],
+        program: data['program'],
+        year: data['year'],
+        semester: data['semester'],
+      );
 
       if (mounted) {
         setState(() {
           _isLoading = false;
         });
-
-        // Show success message
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text('Profile updated successfully!'),
             backgroundColor: Colors.green,
           ),
         );
-
-        // Navigate back to profile page
         Navigator.pop(context, true);
       }
     } catch (e) {
@@ -625,7 +640,6 @@ class _EditProfilePageState extends State<EditProfilePage> {
         setState(() {
           _isLoading = false;
         });
-
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text('Failed to update profile: $e'),

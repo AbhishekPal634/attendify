@@ -3,6 +3,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'widgets/custom_button.dart';
 import 'edit_profile_page.dart';
 import 'services/auth_service.dart';
+import 'services/user_service.dart';
 import 'models/student.dart' as student_model;
 
 class ProfilePage extends StatefulWidget {
@@ -14,6 +15,7 @@ class ProfilePage extends StatefulWidget {
 
 class _ProfilePageState extends State<ProfilePage> {
   final _authService = AuthService();
+  final _userService = UserService();
   student_model.Student? _currentStudent;
   bool _isLoading = true;
 
@@ -30,24 +32,27 @@ class _ProfilePageState extends State<ProfilePage> {
       final user = FirebaseAuth.instance.currentUser;
       if (user == null) return;
 
-      // Build a minimal student profile locally (no dummy data)
+      final doc = await _userService.getUser(user.uid);
       final now = DateTime.now();
       final student = student_model.Student(
         id: user.uid,
-        name: user.displayName ?? (user.email?.split('@').first ?? 'Student'),
-        email: user.email ?? '',
-        studentId: '',
-        phone: '',
-        dateOfBirth: '',
-        gender: 'Male',
-        address: '',
-        program: '',
-        year: '',
-        semester: '',
-        cgpa: 0.0,
-        creditsCompleted: 0,
-        totalCredits: 0,
-        expectedGraduation: '',
+        name:
+            doc?['name'] ??
+            user.displayName ??
+            (user.email?.split('@').first ?? 'Student'),
+        email: doc?['email'] ?? user.email ?? '',
+        studentId: doc?['studentId'] ?? '',
+        phone: doc?['phone'] ?? '',
+        dateOfBirth: doc?['dateOfBirth'] ?? '',
+        gender: doc?['gender'] ?? 'Male',
+        address: doc?['address'] ?? '',
+        program: doc?['program'] ?? '',
+        year: doc?['year'] ?? '',
+        semester: doc?['semester'] ?? '',
+        cgpa: (doc?['cgpa'] ?? 0.0).toDouble(),
+        creditsCompleted: doc?['creditsCompleted'] ?? 0,
+        totalCredits: doc?['totalCredits'] ?? 0,
+        expectedGraduation: doc?['expectedGraduation'] ?? '',
         createdAt: now,
         updatedAt: now,
       );
@@ -102,8 +107,8 @@ class _ProfilePageState extends State<ProfilePage> {
                 ),
               );
 
-              // If profile was updated, show a success message
               if (result == true && mounted) {
+                await _loadStudentProfile();
                 ScaffoldMessenger.of(context).showSnackBar(
                   const SnackBar(
                     content: Text('Profile updated successfully!'),

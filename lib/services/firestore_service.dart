@@ -8,62 +8,63 @@ class FirestoreService {
 
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
 
-  CollectionReference get _sessionsCol => _firestore.collection('sessions');
   CollectionReference get _sessionCol => _firestore.collection('session');
 
-  // Fetch all sessions. Optionally filter by status, subject, or faculty.
+  // Fetch all sessions from 'session'. Optionally filter by status, subject, or faculty.
   Future<List<session_model.Session>> fetchSessions({
     String? status, // 'scheduled' | 'active' | 'completed' | 'cancelled'
     String? subjectId,
     String? facultyName,
   }) async {
-    // Try primary collection 'sessions' first
-    Query query = _sessionsCol.orderBy('startTime', descending: false);
-    if (status != null) {
-      query = query.where('status', isEqualTo: status);
-    }
+    Query query = _sessionCol.orderBy('startTime', descending: false);
+    // Support either 'subjectId' or schema's 'classId' field
     if (subjectId != null) {
-      query = query.where('subjectId', isEqualTo: subjectId);
+      // First try subjectId; if schema uses classId this will be filtered in-memory
+      query = query.where('classId', isEqualTo: subjectId);
+    }
+    final snap = await query.get();
+    var list = snap.docs.map((d) => _sessionFromDoc(d)).toList();
+    // Apply optional filters in-memory due to schema differences
+    if (status != null) {
+      list = list.where((s) => s.status == status).toList();
     }
     if (facultyName != null) {
-      query = query.where('facultyName', isEqualTo: facultyName);
+      list = list.where((s) => s.facultyName == facultyName).toList();
     }
-
-    final primary = await query.get();
-    if (primary.docs.isNotEmpty) {
-      return primary.docs.map((d) => _sessionFromDoc(d)).toList();
-    }
-
-    // Fallback to alternate collection 'session' (singular)
-    Query alt = _sessionCol.orderBy('startTime', descending: false);
     if (subjectId != null) {
-      alt = alt.where('classId', isEqualTo: subjectId);
+      list = list.where((s) => s.subjectId == subjectId).toList();
     }
-    final altSnap = await alt.get();
-    final all = altSnap.docs.map((d) => _sessionFromDoc(d)).toList();
-
-    // Apply remaining filters in-memory to accommodate schema differences
-    var filtered = all;
-    if (status != null) {
-      filtered = filtered.where((s) => s.status == status).toList();
-    }
-    if (facultyName != null) {
-      filtered = filtered.where((s) => s.facultyName == facultyName).toList();
-    }
-    return filtered;
+    return list;
   }
 
   // Fetch active sessions only
   Future<List<session_model.Session>> fetchActiveSessions() async {
-    final snapshot = await _sessionsCol
-        .where('status', isEqualTo: 'active')
-        .get();
-    if (snapshot.docs.isNotEmpty) {
-      return snapshot.docs.map((doc) => _sessionFromDoc(doc)).toList();
+    // Load from 'session' and filter by time window
+    final now = DateTime.now();
+    final snap = await _sessionCol.get();
+    final sessions = snap.docs.map((d) => _sessionFromDoc(d)).toList();
+    return sessions
+        .where((s) => now.isAfter(s.startTime) && now.isBefore(s.endTime))
+        .toList();
+  }
+
+  // Fetch upcoming sessions (startTime > from). Defaults to now; optional limit.
+  Future<List<session_model.Session>> fetchUpcomingSessions({
+    DateTime? from,
+    int? limit,
+  }) async {
+    final DateTime startAfter = (from ?? DateTime.now()).toUtc();
+    // Firestore expects Timestamp for range; store as Timestamp via milliseconds
+    Query query = _sessionCol
+        .orderBy('startTime')
+        .where('startTime', isGreaterThan: Timestamp.fromDate(startAfter));
+    if (limit != null && limit > 0) {
+      query = query.limit(limit);
     }
-    // Fallback to singular collection using isActive flag
-    final alt = await _sessionCol.where('isActive', isEqualTo: true).get();
-    return alt.docs.map((doc) => _sessionFromDoc(doc)).toList();
+    final snap = await query.get();
+    final sessions = snap.docs.map((d) => _sessionFromDoc(d)).toList();
+    sessions.sort((a, b) => a.startTime.compareTo(b.startTime));
+    return sessions;
   }
 
   // Mark attendance as present by adding the studentId to attendedStudents array
@@ -71,29 +72,24 @@ class FirestoreService {
     required String sessionId,
     required String studentId,
   }) async {
-    // Try 'sessions' then fallback to 'session'
-    DocumentReference docRef = _sessionsCol.doc(sessionId);
-    var snap = await docRef.get();
+    // Use only 'session' collection
+    final DocumentReference docRef = _sessionCol.doc(sessionId);
+    final snap = await docRef.get();
     if (!snap.exists) {
-      docRef = _sessionCol.doc(sessionId);
-      snap = await docRef.get();
-      if (!snap.exists) {
-        throw Exception('Session not found');
-      }
+      throw Exception('Session not found');
     }
     final data = snap.data() as Map<String, dynamic>;
 
     DateTime _toDate(dynamic v) {
-      if (v is Timestamp) return v.toDate();
-      if (v is String) return DateTime.tryParse(v) ?? DateTime.now();
+      if (v is Timestamp) return v.toDate().toLocal();
+      if (v is String) {
+        final parsed = DateTime.tryParse(v);
+        return (parsed?.toLocal()) ?? DateTime.now();
+      }
       return DateTime.now();
     }
 
-    final bool hasIsActive = data.containsKey('isActive');
-    final bool isActiveFlag = data['isActive'] == true;
-    final String status =
-        (data['status'] ?? (isActiveFlag ? 'active' : 'scheduled')) as String;
-
+    // Validate strictly by time window regardless of any 'isActive' flag or 'status'
     DateTime? start;
     DateTime? end;
     try {
@@ -103,20 +99,13 @@ class FirestoreService {
       start = null;
       end = null;
     }
-    final now = DateTime.now();
-    bool withinWindow = true;
-    if (start != null && end != null) {
-      withinWindow = now.isAfter(start) && now.isBefore(end);
+    if (start == null || end == null) {
+      throw Exception('Session time not configured');
     }
-
-    if (hasIsActive) {
-      if (!isActiveFlag) {
-        throw Exception('Session is not active');
-      }
-    } else {
-      if (status != 'active' || !withinWindow) {
-        throw Exception('Session is not active');
-      }
+    final now = DateTime.now();
+    final withinWindow = now.isAfter(start) && now.isBefore(end);
+    if (!withinWindow) {
+      throw Exception('Session is not active');
     }
 
     final List<dynamic> attended = (data['attendedStudents'] ?? []) as List;
@@ -136,8 +125,11 @@ class FirestoreService {
     final data = doc.data() as Map<String, dynamic>? ?? {};
 
     DateTime _toDate(dynamic v) {
-      if (v is Timestamp) return v.toDate();
-      if (v is String) return DateTime.tryParse(v) ?? DateTime.now();
+      if (v is Timestamp) return v.toDate().toLocal();
+      if (v is String) {
+        final parsed = DateTime.tryParse(v);
+        return (parsed?.toLocal()) ?? DateTime.now();
+      }
       return DateTime.now();
     }
 
@@ -148,10 +140,7 @@ class FirestoreService {
       facultyName: (data['facultyName'] ?? data['facultyId'] ?? '') as String,
       startTime: _toDate(data['startTime']),
       endTime: _toDate(data['endTime']),
-      status:
-          (data['status'] ??
-                  (data['isActive'] == true ? 'active' : 'scheduled'))
-              as String,
+      status: (data['status'] ?? 'scheduled') as String,
       location: (data['location'] ?? '') as String,
       attendedStudents: List<String>.from(data['attendedStudents'] ?? const []),
       createdAt: _toDate(data['createdAt']),
