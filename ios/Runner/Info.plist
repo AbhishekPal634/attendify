@@ -47,5 +47,9 @@
 	<true/>
 	<key>NSCameraUsageDescription</key>
 	<string>This app needs camera access to verify your identity for attendance marking.</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>Location is used to display coordinates when you verify attendance.</string>
+	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+	<string>Location is used to display coordinates when you verify attendance.</string>
 </dict>
 </plist>

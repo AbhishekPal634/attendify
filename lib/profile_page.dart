@@ -3,7 +3,6 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'widgets/custom_button.dart';
 import 'edit_profile_page.dart';
 import 'services/auth_service.dart';
-import 'services/firestore_service.dart';
 import 'models/student.dart' as student_model;
 
 class ProfilePage extends StatefulWidget {
@@ -15,7 +14,6 @@ class ProfilePage extends StatefulWidget {
 
 class _ProfilePageState extends State<ProfilePage> {
   final _authService = AuthService();
-  final _firestoreService = FirestoreService();
   student_model.Student? _currentStudent;
   bool _isLoading = true;
 
@@ -32,9 +30,26 @@ class _ProfilePageState extends State<ProfilePage> {
       final user = FirebaseAuth.instance.currentUser;
       if (user == null) return;
 
-      final student = await _firestoreService.getOrCreateStudentByEmail(
-        user.email!,
-        user.displayName ?? 'Student',
+      // Build a minimal student profile locally (no dummy data)
+      final now = DateTime.now();
+      final student = student_model.Student(
+        id: user.uid,
+        name: user.displayName ?? (user.email?.split('@').first ?? 'Student'),
+        email: user.email ?? '',
+        studentId: '',
+        phone: '',
+        dateOfBirth: '',
+        gender: 'Male',
+        address: '',
+        program: '',
+        year: '',
+        semester: '',
+        cgpa: 0.0,
+        creditsCompleted: 0,
+        totalCredits: 0,
+        expectedGraduation: '',
+        createdAt: now,
+        updatedAt: now,
       );
 
       setState(() {

@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'widgets/custom_button.dart';
 import 'widgets/custom_input_field.dart';
-import 'services/firestore_service.dart';
 import 'models/student.dart' as student_model;
 
 class EditProfilePage extends StatefulWidget {
@@ -14,7 +13,6 @@ class EditProfilePage extends StatefulWidget {
 
 class _EditProfilePageState extends State<EditProfilePage> {
   final _formKey = GlobalKey<FormState>();
-  final _firestoreService = FirestoreService();
 
   // Text controllers for form fields
   late TextEditingController _nameController;
@@ -45,26 +43,49 @@ class _EditProfilePageState extends State<EditProfilePage> {
       final user = FirebaseAuth.instance.currentUser;
       if (user == null) return;
 
-      final student = await _firestoreService.getOrCreateStudentByEmail(
-        user.email!,
-        user.displayName ?? 'Student',
+      // Build a minimal student profile from FirebaseAuth without any dummy data
+      final now = DateTime.now();
+      final minimalStudent = student_model.Student(
+        id: user.uid,
+        name: user.displayName ?? (user.email?.split('@').first ?? 'Student'),
+        email: user.email ?? '',
+        studentId: '',
+        phone: '',
+        dateOfBirth: '',
+        gender: 'Male',
+        address: '',
+        program: '',
+        year: '',
+        semester: '',
+        cgpa: 0.0,
+        creditsCompleted: 0,
+        totalCredits: 0,
+        expectedGraduation: '',
+        createdAt: now,
+        updatedAt: now,
       );
 
-      if (student != null) {
-        setState(() {
-          _currentStudent = student;
-          // Initialize controllers with current data
-          _nameController = TextEditingController(text: student.name);
-          _phoneController = TextEditingController(text: student.phone);
-          _dobController = TextEditingController(text: student.dateOfBirth);
-          _addressController = TextEditingController(text: student.address);
-          _programController = TextEditingController(text: student.program);
-          _yearController = TextEditingController(text: student.year);
-          _semesterController = TextEditingController(text: student.semester);
-          _selectedGender = student.gender;
-          _isLoading = false;
-        });
-      }
+      setState(() {
+        _currentStudent = minimalStudent;
+        // Initialize controllers with current data
+        _nameController = TextEditingController(text: minimalStudent.name);
+        _phoneController = TextEditingController(text: minimalStudent.phone);
+        _dobController = TextEditingController(
+          text: minimalStudent.dateOfBirth,
+        );
+        _addressController = TextEditingController(
+          text: minimalStudent.address,
+        );
+        _programController = TextEditingController(
+          text: minimalStudent.program,
+        );
+        _yearController = TextEditingController(text: minimalStudent.year);
+        _semesterController = TextEditingController(
+          text: minimalStudent.semester,
+        );
+        _selectedGender = minimalStudent.gender;
+        _isLoading = false;
+      });
     } catch (e) {
       print('Error loading student data: $e');
       setState(() => _isLoading = false);
@@ -580,7 +601,8 @@ class _EditProfilePageState extends State<EditProfilePage> {
         semester: _semesterController.text.trim(),
       );
 
-      await _firestoreService.updateStudent(updatedStudent);
+      // No Firestore persistence here; just update local state
+      _currentStudent = updatedStudent;
 
       if (mounted) {
         setState(() {

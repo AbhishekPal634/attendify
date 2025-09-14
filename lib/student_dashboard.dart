@@ -3,9 +3,9 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'widgets/custom_button.dart';
 import 'facial_verification_page.dart';
 import 'profile_page.dart';
-import 'services/firestore_service.dart';
 import 'models/student.dart' as student_model;
 import 'models/session.dart';
+import 'services/firestore_service.dart';
 
 class StudentDashboard extends StatefulWidget {
   const StudentDashboard({super.key});
@@ -15,7 +15,7 @@ class StudentDashboard extends StatefulWidget {
 }
 
 class _StudentDashboardState extends State<StudentDashboard> {
-  final FirestoreService _firestoreService = FirestoreService();
+  final _firestoreService = FirestoreService();
   student_model.Student? _currentStudent;
   List<Session> _todaySessions = [];
   List<Session> _activeSessions = [];
@@ -42,48 +42,55 @@ class _StudentDashboardState extends State<StudentDashboard> {
 
       print('👤 Loading dashboard for user: ${user.email}');
 
-      // Get current student data (creates dummy data if none exists)
-      final student = await _firestoreService.getOrCreateStudentByEmail(
-        user.email!,
-        user.displayName ?? 'Student',
+      // Build a minimal student locally (no dummy data)
+      final now = DateTime.now();
+      final student = student_model.Student(
+        id: user.uid,
+        name: user.displayName ?? (user.email?.split('@').first ?? 'Student'),
+        email: user.email ?? '',
+        studentId: '',
+        phone: '',
+        dateOfBirth: '',
+        gender: 'Male',
+        address: '',
+        program: '',
+        year: '',
+        semester: '',
+        cgpa: 0.0,
+        creditsCompleted: 0,
+        totalCredits: 0,
+        expectedGraduation: '',
+        createdAt: now,
+        updatedAt: now,
       );
-
-      if (student == null) {
-        print('❌ Failed to get or create student data');
-        return;
-      }
 
       print('✅ Student loaded successfully: ${student.name}');
 
-      // Get sessions data
-      final allSessions = await _firestoreService.getStudentSessions(
-        student.id,
-      );
-      final activeSessions = await _firestoreService.getActiveSessions(
-        student.id,
-      );
-
-      // Filter today's sessions
+      // Fetch sessions from Firestore
+      final sessions = await _firestoreService.fetchSessions();
       final today = DateTime.now();
-      final todaySessions = allSessions.where((session) {
-        return session.startTime.year == today.year &&
-            session.startTime.month == today.month &&
-            session.startTime.day == today.day;
+
+      final todaySessions = sessions.where((s) {
+        return s.startTime.year == today.year &&
+            s.startTime.month == today.month &&
+            s.startTime.day == today.day;
       }).toList();
 
-      // Filter upcoming sessions (next 7 days)
+      // Consider sessions active if status == 'active' (maps from isActive)
+      final activeSessions = sessions
+          .where((s) => s.status == 'active')
+          .toList();
+
       final weekFromNow = today.add(const Duration(days: 7));
-      final upcomingSessions = allSessions.where((session) {
-        return session.startTime.isAfter(today) &&
-            session.startTime.isBefore(weekFromNow) &&
-            session.status == 'scheduled';
+      final upcomingSessions = sessions.where((s) {
+        return s.startTime.isAfter(today) &&
+            s.startTime.isBefore(weekFromNow) &&
+            s.status == 'scheduled';
       }).toList();
 
-      // Get attendance data
-      final attendancePercentages = await _firestoreService
-          .getAttendancePercentage(student.id);
-      final overallAttendance = await _firestoreService
-          .getOverallAttendancePercentage(student.id);
+      // Attendance percentages can be computed later when attendance data exists
+      final attendancePercentages = <String, double>{};
+      final overallAttendance = 0.0;
 
       setState(() {
         _currentStudent = student;
@@ -380,16 +387,20 @@ class _StudentDashboardState extends State<StudentDashboard> {
           const SizedBox(height: 16),
           CustomButton(
             text: 'Mark Attendance',
-            onPressed: () {
-              Navigator.push(
+            onPressed: () async {
+              final result = await Navigator.push(
                 context,
                 MaterialPageRoute(
                   builder: (context) => FacialVerificationPage(
                     subjectName: session.subjectName,
                     facultyName: session.facultyName,
+                    sessionId: session.id,
                   ),
                 ),
               );
+              if (result == true) {
+                _loadDashboardData();
+              }
             },
             backgroundColor: Colors.green,
             height: 48,

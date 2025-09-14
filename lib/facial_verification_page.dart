@@ -2,15 +2,20 @@ import 'package:flutter/material.dart';
 import 'package:camera/camera.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'widgets/custom_button.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'services/firestore_service.dart';
+import 'package:geolocator/geolocator.dart';
 
 class FacialVerificationPage extends StatefulWidget {
   final String subjectName;
   final String facultyName;
+  final String sessionId;
 
   const FacialVerificationPage({
     super.key,
     required this.subjectName,
     required this.facultyName,
+    required this.sessionId,
   });
 
   @override
@@ -30,6 +35,12 @@ class _FacialVerificationPageState extends State<FacialVerificationPage>
 
   late AnimationController _pulseController;
   late Animation<double> _pulseAnimation;
+
+  final _firestoreService = FirestoreService();
+  final _auth = FirebaseAuth.instance;
+
+  Position? _position;
+  String? _locationError;
 
   @override
   void initState() {
@@ -141,7 +152,7 @@ class _FacialVerificationPageState extends State<FacialVerificationPage>
     super.dispose();
   }
 
-  void _startVerification() {
+  Future<void> _startVerification() async {
     setState(() {
       _isVerifying = true;
     });
@@ -149,14 +160,70 @@ class _FacialVerificationPageState extends State<FacialVerificationPage>
     _pulseController.repeat(reverse: true);
 
     // Simulate verification process
-    Future.delayed(const Duration(seconds: 3), () {
-      _pulseController.stop();
+    await Future.delayed(const Duration(seconds: 3));
+
+    _pulseController.stop();
+
+    bool success = true; // Replace with real face verification result
+
+    if (success) {
+      // Mark present in Firestore
+      final uid = _auth.currentUser?.uid;
+      if (uid != null) {
+        try {
+          await _firestoreService.markPresent(
+            sessionId: widget.sessionId,
+            studentId: uid,
+          );
+        } catch (e) {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text('Failed to mark attendance: $e')),
+            );
+          }
+        }
+      }
+
+      // Get current location (permissions handled here)
+      try {
+        bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
+        if (!serviceEnabled) {
+          _locationError = 'Location services are disabled';
+        } else {
+          LocationPermission permission = await Geolocator.checkPermission();
+          if (permission == LocationPermission.denied) {
+            permission = await Geolocator.requestPermission();
+          }
+          if (permission == LocationPermission.deniedForever ||
+              permission == LocationPermission.denied) {
+            _locationError = 'Location permission denied';
+          } else {
+            _position = await Geolocator.getCurrentPosition(
+              desiredAccuracy: LocationAccuracy.high,
+            );
+          }
+        }
+      } catch (e) {
+        _locationError = 'Error getting location: $e';
+      }
+
+      if (mounted) {
+        final msg = _position != null
+            ? 'Attendance marked. Lat: ${_position!.latitude.toStringAsFixed(6)}, Lng: ${_position!.longitude.toStringAsFixed(6)}'
+            : (_locationError ?? 'Attendance marked present.');
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(msg)));
+      }
+    }
+
+    if (mounted) {
       setState(() {
         _isVerifying = false;
         _isVerificationComplete = true;
-        _isVerificationSuccessful = true; // For demo, always successful
+        _isVerificationSuccessful = success;
       });
-    });
+    }
   }
 
   void _retryVerification() {
@@ -487,16 +554,27 @@ class _FacialVerificationPageState extends State<FacialVerificationPage>
                                       ),
                                     ),
                                     const SizedBox(height: 8),
-                                    Text(
-                                      _isVerificationSuccessful
-                                          ? 'Attendance marked successfully'
-                                          : 'Please try again',
-                                      style: TextStyle(
-                                        color: Colors.white.withOpacity(0.8),
-                                        fontSize: 14,
-                                        fontFamily: 'Poppins',
+                                    if (_isVerificationSuccessful &&
+                                        _position != null)
+                                      Text(
+                                        'Lat: ${_position!.latitude.toStringAsFixed(6)}, Lng: ${_position!.longitude.toStringAsFixed(6)}',
+                                        style: const TextStyle(
+                                          color: Colors.white,
+                                          fontSize: 14,
+                                          fontFamily: 'Poppins',
+                                        ),
                                       ),
-                                    ),
+                                    if (_isVerificationSuccessful &&
+                                        _position == null &&
+                                        _locationError != null)
+                                      Text(
+                                        _locationError!,
+                                        style: const TextStyle(
+                                          color: Colors.white,
+                                          fontSize: 14,
+                                          fontFamily: 'Poppins',
+                                        ),
+                                      ),
                                   ],
                                 ),
                               ),
